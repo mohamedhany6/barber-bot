@@ -1,3 +1,5 @@
+from dotenv import load_dotenv
+load_dotenv()
 
 from telegram import (
     Update,
@@ -374,7 +376,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             return
 
-        if database.is_slot_taken(date, time):
+        if not time or database.is_slot_taken(date, time):
 
             await q.message.reply_text("❌ الميعاد اتحجز")
 
@@ -417,8 +419,6 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🆔 رقم الحجز:
 {booking_id}
 
-🏪 {config.SHOP_NAME}
-
 📅 {date}
 ⏰ {to_12h(time)}
 
@@ -448,6 +448,7 @@ async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text
+    admin_mode = context.user_data.get("admin_mode")
 
     # ================= BOOKINGS BY DATE =================
     if text == "📅 حجز يوم":
@@ -462,9 +463,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         context.user_data["admin_mode"] = "bookings_by_date"
-
         return
-
 
     # ================= INCOME BY DATE =================
     if text == "💰 دخل يوم":
@@ -479,25 +478,28 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         context.user_data["admin_mode"] = "income_by_date"
+        return
+    
+    # ================= DELETE BOOKING =================
+    if text == "❌ إلغاء حجز":
 
+        if update.effective_user.id != config.ADMIN_ID:
+            return
+
+        await update.message.reply_text("📩 ابعت رقم الحجز (ID)")
+        context.user_data["admin_mode"] = "delete"
         return
 
-
     # ================= BOOKINGS MODE =================
-    if context.user_data.get("admin_mode") == "bookings_by_date":
+    if admin_mode == "bookings_by_date":
 
         date = text
-
         data = database.get_bookings_by_date(date)
 
         if not data:
 
-            await update.message.reply_text(
-                f"📭 مفيش حجوزات يوم {date}"
-            )
-
+            await update.message.reply_text(f"📭 مفيش حجوزات يوم {date}")
             context.user_data.pop("admin_mode")
-
             return
 
         msg = f"📅 حجوزات يوم {date}\n"
@@ -505,7 +507,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for bid, name, phone, date, time, service, chat_id in data:
 
             msg += f"""
-
 ━━━━━━━━━━━━━━
 🆔 {bid}
 
@@ -519,111 +520,73 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 """
 
         await update.message.reply_text(msg)
-
         context.user_data.pop("admin_mode")
-
         return
 
-
     # ================= INCOME MODE =================
-    if context.user_data.get("admin_mode") == "income_by_date":
+    if admin_mode == "income_by_date":
 
-     date = text
+        date = text
 
-    income_data = database.get_today_income(date)
+        income_data = database.get_today_income(date)
 
-    total = income_data["total"]
+        total = income_data["total"]
+        details = ""
 
-    details = ""
-
-    for row in income_data["details"]:
-
-        details += f"""
-
+        for row in income_data["details"]:
+            details += f"""
 💇 {row['service']}
 💵 {row['price']} جنيه
 ────────────
 """
 
-    if total == 0:
+        if total == 0:
+
+            await update.message.reply_text(f"💸 مفيش دخل يوم {date}")
+            context.user_data.pop("admin_mode", None)
+            return
 
         await update.message.reply_text(
-            f"💸 مفيش دخل يوم {date}"
-        )
-
-        context.user_data.pop("admin_mode")
-
-        return
-
-    await update.message.reply_text(
-        f"""💰 دخل يوم {date}
+            f"""💰 دخل يوم {date}
 
 {details}
 
 ━━━━━━━━━━━━━━
 💵 الإجمالي: {total} جنيه"""
-    )
-
-    context.user_data.pop("admin_mode")
-
-    return
-
-    # ================= DELETE =================
-    if text == "❌ إلغاء حجز":
-
-        if update.effective_user.id != config.ADMIN_ID:
-            return
-
-        await update.message.reply_text(
-            "📩 ابعت رقم الحجز (ID)"
         )
 
-        context.user_data["admin_mode"] = "delete"
-
+        context.user_data.pop("admin_mode", None)
         return
 
-
     # ================= DELETE MODE =================
-    if context.user_data.get("admin_mode") == "delete":
+    if admin_mode == "delete" and text:
 
         try:
             booking_id = int(text)
-
         except:
-
             await update.message.reply_text("❌ لازم رقم صحيح")
-
             return
 
         deleted = database.delete_booking_by_id(booking_id)
 
         if deleted:
-
             await update.message.reply_text("✅ تم حذف الحجز")
-
         else:
-
             await update.message.reply_text("❌ الحجز غير موجود")
 
         context.user_data.pop("admin_mode")
-
         return
 
-
-    # ================= CUSTOMER =================
+    # ================= CUSTOMER BOOKING =================
     try:
-
         name, phone = text.split("\n")
-
     except:
-
         await update.message.reply_text(
             """❌ ابعت بالشكل ده:
 
 الاسم
- رقم الموبايل"""
+رقم الموبايل"""
         )
-
         return
 
     date = context.user_data.get("date")
@@ -632,10 +595,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not all([date, time, service]):
 
-        await update.message.reply_text(
-            "❌ ابدأ الحجز الأول"
-        )
-
+        await update.message.reply_text("❌ ابدأ الحجز الأول")
         return
 
     context.user_data["name"] = name
@@ -643,15 +603,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [
-            InlineKeyboardButton(
-                "✅ تأكيد",
-                callback_data="confirm"
-            ),
-
-            InlineKeyboardButton(
-                "❌ إلغاء",
-                callback_data="cancel"
-            )
+            InlineKeyboardButton("✅ تأكيد", callback_data="confirm"),
+            InlineKeyboardButton("❌ إلغاء", callback_data="cancel")
         ]
     ]
 
@@ -677,10 +630,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 {config.PRICES.get(service, 0)} جنيه
 
 ⚠️ تدريج الدقن +40 جنيه""",
-
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
-
 # ================= AUTO TASKS =================
 async def auto_tasks(context):
     app = context.application
